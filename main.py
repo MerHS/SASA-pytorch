@@ -12,6 +12,7 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim
+import torch.optim.lr_scheduler as lr_sched
 import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
@@ -20,6 +21,7 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 
 import model.sa_resnet as sa_resnet
+from SGDR import LinearWarmupScheduler
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -27,21 +29,21 @@ model_names = sorted(name for name in models.__dict__
 
 all_model_names = sa_resnet.model_names + model_names
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training with SASA')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet18',
+parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet50',
                     choices=all_model_names,
                     help='model architecture: ' +
                         ' | '.join(all_model_names) +
-                        ' (default: resnet18)')
+                        ' (default: sa_resnet50)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -181,6 +183,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
+    scheduler = LinearWarmupScheduler(optimizer, 10, lr_sched.CosineAnnealingLR(optimizer, args.epochs))
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -195,6 +199,9 @@ def main_worker(gpu, ngpus_per_node, args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
+            scheduler = LinearWarmupScheduler(optimizer, total_epoch=10,
+                                              after_scheduler=lr_sched.CosineAnnealingLR(optimizer, args.epochs),
+                                              last_epoch=checkpoint['epoch'])
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -239,9 +246,10 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     for epoch in range(args.start_epoch, args.epochs):
+        scheduler.step()
+
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
@@ -399,14 +407,6 @@ class ProgressMeter(object):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
-
-def adjust_learning_rate(optimizer, epoch, args):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
