@@ -190,7 +190,7 @@ class SAMixtureConv2d(nn.Module):
         init.uniform_(self.relative_x, -rel_bound, rel_bound)
         init.uniform_(self.relative_y, -rel_bound, rel_bound)
 
-        emb_bound = 1 / math.sqrt(self.out_channels // groups)
+        emb_bound = 1 / math.sqrt(self.out_channels // self.gropus)
         init.uniform_(self.emb_x, -emb_bound, emb_bound)
         init.uniform_(self.emb_y, -emb_bound, emb_bound)
         init.uniform_(self.emb_m, -emb_bound, emb_bound)
