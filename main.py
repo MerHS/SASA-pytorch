@@ -23,15 +23,22 @@ import torchvision.models as models
 import model.sa_resnet as sa_resnet
 from SGDR import LinearWarmupScheduler
 
-model_names = sorted(name for name in models.__dict__
+model_names = list(sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
-    and callable(models.__dict__[name]))
+    and callable(models.__dict__[name])))
 
 all_model_names = sa_resnet.model_names + model_names
 
+datasets = {
+    'cifar10': (10, [0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]),
+    'cifar100': (100, [0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]),
+    'imagenet': (1000, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+}
+
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training with SASA')
-parser.add_argument('data', metavar='DIR',
-                    help='path to dataset')
+parser.add_argument('--data_path', default='data', help='path to dataset directory')
+parser.add_argument('--dataset', metavar='DATASET', default='imagenet',
+                    choices=list(datasets.keys()), help='dataset to train/val')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet50',
                     choices=all_model_names,
                     help='model architecture: ' +
@@ -135,17 +142,22 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+
     # create model
-    if args.arch.startswith('cstem') or args.arch.startswith('sa_'):
+    num_classes, dataset_mean, dataset_std = dataset[args.dataset]
+
+    if args.arch not in model_names:
         print("=> creating model '{}'".format(args.arch))
-        model = sa_resnet.get_model(args.arch)
+        model = sa_resnet.get_model(args.arch, num_classes=num_classes)
     else:
         if args.pretrained:
+            if args.dataset != 'imagenet':
+                raise Exception('cannot download non-imagenet pretrained model')
             print("=> using pre-trained model '{}'".format(args.arch))
             model = models.__dict__[args.arch](pretrained=True)
         else:
             print("=> creating model '{}'".format(args.arch))
-            model = models.__dict__[args.arch]()
+            model = models.__dict__[args.arch](num_classes=num_classes)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -183,6 +195,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
+    # loss scheduler
     scheduler = LinearWarmupScheduler(optimizer, 10, lr_sched.CosineAnnealingLR(optimizer, args.epochs))
 
     # optionally resume from a checkpoint
@@ -208,19 +221,38 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    traindir = os.path.join(args.data_path, 'train')
+    valdir = os.path.join(args.data_path, 'val')
+    if not os.path.exists(args.data_path):
+        os.mkdir(args.data_path)
+    if not os.path.exists(traindir):
+        os.mkdir(traindir)
+    if not os.path.exists(valdir):
+        os.mkdir(valdir)
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
+    normalize = transforms.Normalize(mean=dataset_mean, std=dataset_std)
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    val_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    if args.dataset == 'cifar10':
+        train_dataset = datasets.CIFAR10(traindir, train=True,
+            download=True, trasnform=train_transform)
+    elif args.dataset == 'cifar100':
+        train_dataset = datasets.CIFAR100(traindir, train=True,
+            download=True, trasnform=train_transform)
+    else:
+        train_dataset = datasets.ImageNet(traindir, split='train',
+            download=True, trasnform=train_transform)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -231,13 +263,19 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+
+    if args.dataset == 'cifar10':
+        val_dataset = datasets.CIFAR10(valdir, train=False,
+            download=True, trasnform=val_transform)
+    elif args.dataset == 'cifar100':
+        val_dataset = datasets.CIFAR100(valdir, train=False,
+            download=True, trasnform=val_transform)
+    else:
+        val_dataset = datasets.ImageNet(valdir, split='val',
+            download=True, transform=val_transform)
+
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 

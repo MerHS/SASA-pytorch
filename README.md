@@ -9,9 +9,9 @@
 
 ## Benchmark
 
-Trained with CIFAR-10, CIFAR-100, ImageNet.
+Trained with ImageNet. (WIP: CIFAR-10, CIFAR-100)
 
 Backbone network and parameters are based on the official torchvision ResNet and trainer example.
 
-Trained 90 epochs / batch 64 on a single NVIDIA 1080Ti GPU, with SGD optimizer with a learning rate of 0.1 which is linearly warmed up for 10 epochs followed by cosine decay. (according to the SASA paper)
+Trained up to 90 epochs / batch 64 on a single NVIDIA 1080Ti GPU, with SGD optimizer with a learning rate of 0.1 which is linearly warmed up for 10 epochs followed by cosine decay. (according to the SASA paper)
 
