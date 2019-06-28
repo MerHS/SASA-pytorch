@@ -37,8 +37,6 @@ class SelfAttentionConv2d(nn.Module):
         self.weight_key = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
         self.weight_value = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
 
-        self.pad = nn.ZeroPad2d(self.padding)
-
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -56,11 +54,11 @@ class SelfAttentionConv2d(nn.Module):
 
     def forward(self, x):
         b, c, h, w = x.size()
-        kh, kw = self.kernel
+        kh, kw = self.kernel_size
         ph, pw = h + self.padding[0] * 2, w + self.padding[1] * 2
 
-        fh = (h + self.padding[0] * 2 - self.kernel[0]) // self.stride[0] + 1
-        fw = (w + self.padding[1] * 2 - self.kernel[1]) // self.stride[1] + 1
+        fh = (ph - kh) // self.stride[0] + 1
+        fw = (pw - kw) // self.stride[1] + 1
         fc = self.out_channels
 
         # TODO: check this could be moved to init
@@ -68,7 +66,8 @@ class SelfAttentionConv2d(nn.Module):
         rel_y = self.relative_y.repeat(1, 1, kw)
         relative_pos = torch.cat([rel_x, rel_y], dim=0).repeat(self.groups, 1, 1).view(fc, kh*kw, 1)
 
-        x = self.pad(x)
+        px, py = self.padding
+        x = F.pad(x, (py, py, px, px))
 
         x_ij = x.permute(0, 2, 3, 1).view(b, ph*pw, self.groups, 1, c // self.groups)
 
@@ -92,13 +91,15 @@ class SelfAttentionConv2d(nn.Module):
 
         fin_v = v.view(b, fc, fh, fw)
 
+        return fin_v
+
     def another_forward(self, x):
         """ yet another implementation for testing """
         b, c, h, w = x.size()
-        kh, kw = self.kernel
+        kh, kw = self.kernel_size
 
-        fh = (h + self.padding[0] * 2 - self.kernel[0]) // self.stride[0] + 1
-        fw = (w + self.padding[1] * 2 - self.kernel[1]) // self.stride[1] + 1
+        fh = (h + self.padding[0] * 2 - kh) // self.stride[0] + 1
+        fw = (w + self.padding[1] * 2 - kw) // self.stride[1] + 1
         fc = self.out_channels
 
         # TODO: check this could be moved to init
@@ -172,8 +173,6 @@ class SAMixtureConv2d(nn.Module):
         self.emb_y = nn.Parameter(torch.Tensor(out_channels // groups, in_height + 2 * padding[0], 1                        ))
         self.emb_m = nn.Parameter(torch.Tensor(mix, out_channels // groups, 1, 1)) # m, c/g, 1, 1
 
-        self.pad = nn.ZeroPad2d(self.padding)
-
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -197,11 +196,11 @@ class SAMixtureConv2d(nn.Module):
 
     def forward(self, x):
         b, c, h, w = x.size()
-        kh, kw = self.kernel
+        kh, kw = self.kernel_size
         ph, pw = h + self.padding[0] * 2, w + self.padding[1] * 2
 
-        fh = (h + self.padding[0] * 2 - self.kernel[0]) // self.stride[0] + 1
-        fw = (w + self.padding[1] * 2 - self.kernel[1]) // self.stride[1] + 1
+        fh = (ph - kh) // self.stride[0] + 1
+        fw = (pw - kw) // self.stride[1] + 1
         fc = self.out_channels
 
         # TODO: check this could be moved to init
@@ -209,7 +208,8 @@ class SAMixtureConv2d(nn.Module):
         rel_y = self.relative_y.repeat(1, 1, kw)
         relative_pos = torch.cat([rel_x, rel_y], dim=0).repeat(self.groups, 1, 1).view(fc, kh*kw, 1)
 
-        x = self.pad(x)
+        px, py = self.padding
+        x = F.pad(x, (py, py, px, px))
 
         x_ij = x.permute(0, 2, 3, 1).view(b, ph*pw, self.groups, 1, c // self.groups) # b, ph*pw, g, 1, c/g
 
