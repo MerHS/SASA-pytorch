@@ -29,7 +29,7 @@ model_names = list(sorted(name for name in models.__dict__
 
 all_model_names = sa_resnet.model_names + model_names
 
-datasets = {
+dataset_dict = {
     'cifar10': (10, [0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]),
     'cifar100': (100, [0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]),
     'imagenet': (1000, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -38,7 +38,7 @@ datasets = {
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training with SASA')
 parser.add_argument('--data_path', default='data', help='path to dataset directory')
 parser.add_argument('--dataset', metavar='DATASET', default='imagenet',
-                    choices=list(datasets.keys()), help='dataset to train/val')
+                    choices=list(dataset_dict.keys()), help='dataset to train/val')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet50',
                     choices=all_model_names,
                     help='model architecture: ' +
@@ -144,7 +144,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
 
     # create model
-    num_classes, dataset_mean, dataset_std = dataset[args.dataset]
+    num_classes, dataset_mean, dataset_std = dataset_dict[args.dataset]
 
     if args.arch not in model_names:
         print("=> creating model '{}'".format(args.arch))
@@ -187,6 +187,8 @@ def main_worker(gpu, ngpus_per_node, args):
             model.cuda()
         else:
             model = torch.nn.DataParallel(model).cuda()
+
+    print("model param #: {}".format(sum(p.numel() for p in model.parameters())))
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -246,13 +248,13 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataset == 'cifar10':
         train_dataset = datasets.CIFAR10(traindir, train=True,
-            download=True, trasnform=train_transform)
+            download=True, transform=train_transform)
     elif args.dataset == 'cifar100':
         train_dataset = datasets.CIFAR100(traindir, train=True,
-            download=True, trasnform=train_transform)
+            download=True, transform=train_transform)
     else:
         train_dataset = datasets.ImageNet(traindir, split='train',
-            download=True, trasnform=train_transform)
+            download=True, transform=train_transform)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -266,10 +268,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.dataset == 'cifar10':
         val_dataset = datasets.CIFAR10(valdir, train=False,
-            download=True, trasnform=val_transform)
+            download=True, transform=val_transform)
     elif args.dataset == 'cifar100':
         val_dataset = datasets.CIFAR100(valdir, train=False,
-            download=True, trasnform=val_transform)
+            download=True, transform=val_transform)
     else:
         val_dataset = datasets.ImageNet(valdir, split='val',
             download=True, transform=val_transform)

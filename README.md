@@ -4,7 +4,9 @@
 
 ## Prerequisites
  * Python +3.6
- * pytorch +1.0
+ * pytorch +1.1.0
+ * scipy
+ * Pillow
  * torchvision
 
 ## Benchmark
