@@ -81,57 +81,16 @@ class SelfAttentionConv2d(nn.Module):
         win_v = F.unfold(vv, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
 
         win_q = win_q[:, :, (kh-1)//2, (kw-1)//2, :].view(b, fc, 1, fh*fw)
-        vx = win_q * (win_k + relative_pos) # (b, c2, kh*kw, fh*fw)
+        vx = (win_q * (win_k + relative_pos)).sum(dim=1) # (b, kh*kw, fh*fw)
 
-        vx = F.softmax(vx, dim=2) # (b, c2, kh*kw, fh*fw)
+        vx = F.softmax(vx, dim=1).unsqueeze(1) # (b, 1, kh*kw, fh*fw)
 
-        v = (vx * win_v).sum(dim=2) # (b,  c2, kh*kw, fh*fw) -> (b, c2, fh*fw)
+        v = (vx * win_v).sum(dim=2) # (b, c2, kh*kw, fh*fw) -> (b, c2, fh*fw)
 
         if self.bias is not None:
             v += self.bias.view(1, -1, 1)
 
         fin_v = v.view(b, fc, fh, fw)
-
-    def another_forward(self, x):
-        """ yet another implementation for testing """
-        b, c, h, w = x.size()
-        kh, kw = self.kernel
-
-        fh = (h + self.padding[0] * 2 - self.kernel[0]) // self.stride[0] + 1
-        fw = (w + self.padding[1] * 2 - self.kernel[1]) // self.stride[1] + 1
-        fc = self.out_channels
-
-        # TODO: check this could be moved to init
-        relative_pos = []
-        for rel_x in self.relative_x:
-            for rel_y in self.relative_y:
-                relative_pos.append(torch.cat(rel_x, rel_y))
-        relative_pos = torch.stack(relative_pos, dim=1).repeat(1, self.groups)
-
-        rel_x = self.relative_x.repeat(1, kh, 1)
-        rel_y = self.relative_y.repeat(1, 1, kw)
-        relative_pos = torch.cat([rel_x, rel_y], dim=0).repeat(self.groups, 1, 1).view(fc, kh*kw).transpose(0, 1)
-
-        # convolution strided window
-        win = F.unfold(x, self.kernel_size, padding=self.padding, stride=self.stride)
-        win = win.view(b, c, kh, kw, fh*fw).transpose(1, 4)
-        win_query = win[:, :, (kh-1)//2, (kw-1)//2, :]
-
-        v_q = win_query.matmul(self.weight_query).view(b, fh*fw, 1, fc)
-        v_k = win.matmul(self.weight_key).view(b, fh*fw, kh*kw, fc)
-        v_v = win.matmul(self.weight_value).view(b, fh*fw, kh*kw, fc)
-
-        v_ab = v_q * (v_k + relative_pos)
-        v_x = F.softmax(v_ab, dim=2)
-
-        v = (v_x * v_v).sum(dim=2)
-
-        if self.bias is not None:
-            v += self.bias.view(1, 1, -1)
-
-        v = v.transpose(2, 1).view(b, fc, fh, fw)
-
-        return v
 
 
 class SAMixtureConv2d(nn.Module):
@@ -170,7 +129,7 @@ class SAMixtureConv2d(nn.Module):
 
         self.emb_x = nn.Parameter(torch.Tensor(out_channels // groups, 1,                          in_width + 2 * padding[1]))
         self.emb_y = nn.Parameter(torch.Tensor(out_channels // groups, in_height + 2 * padding[0], 1                        ))
-        self.emb_m = nn.Parameter(torch.Tensor(mix, out_channels // groups, 1, 1)) # m, c/g, 1, 1
+        self.emb_m = nn.Parameter(torch.Tensor(mix, out_channels // groups, 1, 1)) # m, fc/g, 1, 1
 
         self.pad = nn.ZeroPad2d(self.padding)
 
@@ -218,7 +177,7 @@ class SAMixtureConv2d(nn.Module):
 
         # spatially aware mixture embedding
         p_ab = (self.emb_x.repeat(1, ph, 1) + self.emb_y.repeat(1, 1, pw)).unsqueeze(0) # 1, fc/g, ph, pw
-        p_abm = (p_ab * self.emb_m).sum(dim=1) # m, ph, pw
+        p_abm = (p_ab * self.emb_m).sum(dim=1) # m, fc/g, ph, pw, -> ßm, ph, pw
         p_abm = F.softmax(p_abm, dim=0).unsqueeze(1).unsqueeze(1) # m, 1, 1, ph, pw
 
         vv = []
@@ -234,9 +193,9 @@ class SAMixtureConv2d(nn.Module):
         win_v = F.unfold(vv, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
 
         win_q = win_q[:, :, (kh-1)//2, (kw-1)//2, :].view(b, fc, 1, fh*fw)
-        vx = win_q * (win_k + relative_pos) # (b, c2, kh*kw, fh*fw)
+        vx = (win_q * (win_k + relative_pos)).sum(dim=1) # (b, kh*kw, fh*fw)
 
-        vx = F.softmax(vx, dim=2) # (b, c2, kh*kw, fh*fw)
+        vx = F.softmax(vx, dim=2).unsqueeze(1) # (b, 1, kh*kw, fh*fw)
 
         v = (vx * win_v).sum(dim=2) # (b,  c2, kh*kw, fh*fw) -> (b, c2, fh*fw)
 
