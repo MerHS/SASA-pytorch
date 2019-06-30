@@ -4,16 +4,16 @@ import torch.nn.functional as F
 
 from torchvision.models.resnet import Bottleneck, ResNet, conv1x1
 
-from sa_layer import SelfAttentionConv2d, SAMixtureConv2d
+from .sa_layer import SelfAttentionConv2d, SAMixtureConv2d
 
 def sa_conv7x7(in_planes, out_planes, stride=1, groups=1, padding=3):
     """ 7x7 SA Convolution with padding """
     return SelfAttentionConv2d(in_planes, out_planes, kernel_size=7, stride=stride,
                                padding=padding, groups=groups, bias=False)
 
-def sa_stem4x4(in_planes, out_planes, stride=1, groups=1, padding=2, mix=4):
+def sa_stem4x4(in_height, in_width, in_planes, out_planes, stride=1, groups=1, padding=2, mix=4):
     """ 4x4 mixed SA Convolution for stem """
-    return SAMixtureConv2d(in_planes, out_planes, kernel_size=4, stride=stride,
+    return SAMixtureConv2d(in_height, in_width, in_planes, out_planes, kernel_size=4, stride=stride,
                            padding=padding, groups=groups, mix=mix, bias=False)
 
 class SelfAttentionBottleneck(nn.Module):
@@ -66,14 +66,15 @@ class SelfAttentionBottleneck(nn.Module):
 
 class SAResNet(nn.Module):
     """ simpler version of torchvision official ResNet """
-    def __init__(self, block, layers, num_classes=1000, use_conv_stem=False):
+    def __init__(self, block, layers, num_classes=1000, use_conv_stem=False, **kwargs):
         super(SAResNet, self).__init__()
 
         self.inplanes = 64
         self.head_count = 8
 
         if use_conv_stem:
-            self.conv1 = sa_stem4x4(3, self.in_planes, groups=4, mix=4)
+            self.conv1 = sa_stem4x4(kwargs['in_height'], kwargs['in_width'], 
+                                    3, self.in_planes, groups=4, mix=4)
             self.maxpool = nn.MaxPool2d(kernel_size=4, stride=4)
         else:
             self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2,
@@ -107,7 +108,7 @@ class SAResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        layers.append(block(self.inplanes, planes, stride, downsample, groups=self.head_count))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups=self.head_count))
@@ -149,7 +150,10 @@ model_dict = {
 
 model_names = list(model_dict.keys())
 
-def get_model(arch, **kwargs):
+def get_model(args, **kwargs):
+    arch = args.arch
+    width = args.width
+
     model_fn, block, layers = model_dict[arch]
     use_conv_stem = arch.startswith('cstem')
-    return model_fn(block, layers, use_conv_stem=use_conv_stem, **kwargs)
+    return model_fn(block, layers, use_conv_stem=use_conv_stem, in_height=width, in_width=width, **kwargs)

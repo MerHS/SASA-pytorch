@@ -9,7 +9,7 @@
  * Pillow
  * torchvision
 
-## Benchmark
+## Benchmark (WIP)
 
 Trained with ImageNet. (WIP: CIFAR-10, CIFAR-100)
 

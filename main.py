@@ -44,6 +44,8 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet50',
                     help='model architecture: ' +
                         ' | '.join(all_model_names) +
                         ' (default: sa_resnet50)')
+parser.add_argument('--width', default=224, type=int,
+                    help='height/width of input image')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
@@ -148,7 +150,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.arch not in model_names:
         print("=> creating model '{}'".format(args.arch))
-        model = sa_resnet.get_model(args.arch, num_classes=num_classes)
+        model = sa_resnet.get_model(args, num_classes=num_classes)
     else:
         if args.pretrained:
             if args.dataset != 'imagenet':
@@ -234,14 +236,14 @@ def main_worker(gpu, ngpus_per_node, args):
 
     normalize = transforms.Normalize(mean=dataset_mean, std=dataset_std)
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224),
+        transforms.RandomResizedCrop(args.width),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize,
     ])
     val_transform = transforms.Compose([
         transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.CenterCrop(args.width),
         transforms.ToTensor(),
         normalize,
     ])
@@ -340,7 +342,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         loss = criterion(output, target)
 
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        [acc1, acc5] = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
@@ -383,7 +385,7 @@ def validate(val_loader, model, criterion, args):
             loss = criterion(output, target)
 
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            [acc1, acc5] = accuracy(output, target, topk=(1, 5))
             losses.update(loss.item(), images.size(0))
             top1.update(acc1[0], images.size(0))
             top5.update(acc5[0], images.size(0))
