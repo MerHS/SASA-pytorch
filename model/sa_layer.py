@@ -61,7 +61,6 @@ class SelfAttentionConv2d(nn.Module):
 
         fh = (ph - kh) // self.stride[0] + 1
         fw = (pw - kw) // self.stride[1] + 1
-        fc = self.out_channels
 
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
@@ -70,26 +69,23 @@ class SelfAttentionConv2d(nn.Module):
         vk = self.weight_key(x)
         vv = self.weight_value(x)
 
-        win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
         # b, fc, fh, fw, 1, 1
         win_q = vq[:, :, (kh-1)//2:ph-(kh//2):self.stride[0], (kw-1)//2:pw-(kw//2):self.stride[1]]
-        win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
 
         win_q_b = win_q.view(b, self.groups, -1, fh, fw) # b, n, fc/n, fh, fw
 
-        win_q_x = win_q_b[:, :, :self.rel_size, :, :] # b, n, x, fh, fw
-        win_q_x = torch.einsum('bnchw,ck->bhwk', [win_q_x, self.relative_x]) # b, fh, fw, kw
+        win_q_x, win_q_y = win_q_b.split(self.rel_size, dim=2) # (b, n, x, fh, fw), (b, n, y, fh, fw)
+        win_q_x = torch.einsum('bnxhw,xk->bhwk', (win_q_x, self.relative_x)) # b, fh, fw, kw
+        win_q_y = torch.einsum('bnyhw,yk->bhwk', (win_q_y, self.relative_y)) # b, fh, fw, kh
+
+        win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
         
-        win_q_y = win_q_b[:, :, self.rel_size:, :, :] # b, n, y, fh, fw
-        win_q_y = torch.einsum('bnchw,ck->bhwk', [win_q_y, self.relative_y]) # b, fh, fw, kh
-
         vx = (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
-
-        vx = vx + win_q_x.unsqueeze(3) + win_q_y.unsqueeze(4)
-
+        vx = vx + win_q_x.unsqueeze(3) + win_q_y.unsqueeze(4) # add rel_x, rel_y
         vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
-        fin_v = (vx * win_v).view(b, fc, fh, fw, -1).sum(dim=4) # (b, fc, fh, fw, kh, kw) -> (b, fc, fh, fw)
+        win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
+        fin_v = torch.einsum('bchwkl->bchw', (vx * win_v, )) # (b, fc, fh, fw, kh, kw) -> (b, fc, fh, fw)
 
         if self.bias is not None:
             fin_v += self.bias.view(1, -1, 1, 1)
