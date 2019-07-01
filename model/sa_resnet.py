@@ -73,13 +73,15 @@ class SAResNet(nn.Module):
         self.head_count = 8
 
         if use_conv_stem:
-            self.conv1 = sa_stem4x4(kwargs['in_height'], kwargs['in_width'], 
-                                    3, self.in_planes, groups=4, mix=4)
-            self.maxpool = nn.MaxPool2d(kernel_size=4, stride=4)
-        else:
             self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2,
                                    padding=3, bias=False)
             self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        else:
+            self.conv1 = sa_stem4x4(kwargs['in_height'], kwargs['in_width'],
+                                    3, self.in_planes, groups=4, mix=4)
+            self.maxpool = nn.MaxPool2d(kernel_size=4, stride=4)
+
 
         self.bn1 = nn.BatchNorm2d(self.inplanes)
         self.relu = nn.ReLU(inplace=True)

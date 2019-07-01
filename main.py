@@ -39,11 +39,11 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training with SAS
 parser.add_argument('--data_path', default='data', help='path to dataset directory')
 parser.add_argument('--dataset', metavar='DATASET', default='imagenet',
                     choices=list(dataset_dict.keys()), help='dataset to train/val')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='sa_resnet50',
+parser.add_argument('-a', '--arch', metavar='ARCH', default='cstem_sa_resnet50',
                     choices=all_model_names,
                     help='model architecture: ' +
                         ' | '.join(all_model_names) +
-                        ' (default: sa_resnet50)')
+                        ' (default: cstem_sa_resnet50)')
 parser.add_argument('--width', default=224, type=int,
                     help='height/width of input image')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
