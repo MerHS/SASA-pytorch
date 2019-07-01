@@ -24,7 +24,7 @@ class SelfAttentionConv2d(nn.Module):
         self.groups = groups # multi-head count
 
         if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_channels))
+            self.bias = nn.Parameter(torch.Tensor(1, out_channels, 1, 1))
         else:
             self.register_parameter('bias', None)
 
@@ -36,6 +36,8 @@ class SelfAttentionConv2d(nn.Module):
         self.weight_query = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
         self.weight_key = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
         self.weight_value = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
+
+        self.softmax = nn.Softmax(dim=3)
 
         self.reset_parameters()
 
@@ -64,7 +66,9 @@ class SelfAttentionConv2d(nn.Module):
         # TODO: check this could be moved to init
         rel_x = self.relative_x.repeat(1, kh, 1)
         rel_y = self.relative_y.repeat(1, 1, kw)
-        relative_pos = torch.cat([rel_x, rel_y], dim=0).repeat(self.groups, 1, 1).view(fc, kh*kw, 1)
+        relative_pos = torch.cat([rel_x, rel_y], dim=0) \
+                            .repeat(self.groups, 1, 1) \
+                            .unsqueeze(1).unsqueeze(1) # fc, 1, 1, kh, kw
 
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
@@ -73,21 +77,20 @@ class SelfAttentionConv2d(nn.Module):
         vk = self.weight_key(x)
         vv = self.weight_value(x)
 
-        win_k = F.unfold(vk, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
-        win_q = F.unfold(vq, (kh, kw), stride=self.stride).view(b, fc, kh, kw, fh*fw)
-        win_v = F.unfold(vv, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
+        win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
+        win_q = vq.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
+        win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
 
-        win_q = win_q[:, :, (kh-1)//2, (kw-1)//2, :].view(b, fc, 1, fh*fw)
-        vx = (win_q * (win_k + relative_pos)).sum(dim=1) # (b, kh*kw, fh*fw)
+        win_q = win_q[:, :, :, :, (kh-1)//2, (kw-1)//2].unsqueeze(4).unsqueeze(4) # b, fc, fh, fh, 1, 1
+        vx = win_q * (win_k + relative_pos) # b, fc, fh, fw, kh, kw
+        vx = vx.sum(dim=1) # b, fh, fw, kh, kw
 
-        vx = F.softmax(vx, dim=1).unsqueeze(1) # (b, 1, kh*kw, fh*fw)
+        vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
-        v = (vx * win_v).sum(dim=2) # (b, c2, kh*kw, fh*fw) -> (b, c2, fh*fw)
+        fin_v = (vx * win_v).view(b, fc, fh, fw, -1).sum(dim=4) # (b, c2, fh, fw, kh, kw) -> (b, c2, fh, fw)
 
         if self.bias is not None:
-            v += self.bias.view(1, -1, 1)
-
-        fin_v = v.view(b, fc, fh, fw)
+            fin_v += self.bias.view(1, -1, 1, 1)
 
         return fin_v
 
