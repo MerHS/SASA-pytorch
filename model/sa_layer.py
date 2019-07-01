@@ -1,4 +1,5 @@
 import math
+import time
 
 import torch
 import torch.nn as nn
@@ -6,7 +7,6 @@ import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.modules.utils import _pair
 from torchvision.models.resnet import conv1x1
-
 
 class SelfAttentionConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size,
@@ -63,12 +63,10 @@ class SelfAttentionConv2d(nn.Module):
         fw = (pw - kw) // self.stride[1] + 1
         fc = self.out_channels
 
-        # TODO: check this could be moved to init
         rel_x = self.relative_x.repeat(1, kh, 1)
         rel_y = self.relative_y.repeat(1, 1, kw)
         relative_pos = torch.cat([rel_x, rel_y], dim=0) \
-                            .repeat(self.groups, 1, 1) \
-                            .unsqueeze(1).unsqueeze(1) # fc, 1, 1, kh, kw
+                            .repeat(self.groups, 1, 1)  # fc, kh, kw
 
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
@@ -78,15 +76,16 @@ class SelfAttentionConv2d(nn.Module):
         vv = self.weight_value(x)
 
         win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
-        win_q = vq.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
+        # b, fc, fh, fw, 1, 1
+        win_q = vq[:, :, (kh-1)//2:ph-(kh//2):self.stride[0], (kw-1)//2:pw-(kw//2):self.stride[1]]
         win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
 
-        win_q = win_q[:, :, :, :, (kh-1)//2, (kw-1)//2].unsqueeze(4).unsqueeze(4) # b, fc, fh, fh, 1, 1
-        vx = (win_q * win_k).sum(dim=1) + (win_q * relative_pos).sum(dim=1) # b, fh, fw, kh, kw
+        vx = torch.einsum('bchw,ckl->bhwkl', [win_q, relative_pos])
+        vx += (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
 
         vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
-        fin_v = (vx * win_v).view(b, fc, fh, fw, -1).sum(dim=4) # (b, c2, fh, fw, kh, kw) -> (b, c2, fh, fw)
+        fin_v = (vx * win_v).view(b, fc, fh, fw, -1).sum(dim=4) # (b, fc, fh, fw, kh, kw) -> (b, fc, fh, fw)
 
         if self.bias is not None:
             fin_v += self.bias.view(1, -1, 1, 1)

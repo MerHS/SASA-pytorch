@@ -126,3 +126,5 @@ dmypy.json
 .vscode
 *.ipynb
 data/
+
+*.pth.tar
