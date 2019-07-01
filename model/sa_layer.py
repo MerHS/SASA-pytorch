@@ -30,8 +30,8 @@ class SelfAttentionConv2d(nn.Module):
 
         # relative position offsets are shared between multi-heads
         self.rel_size = (out_channels // groups) // 2
-        self.relative_x = nn.Parameter(torch.Tensor(self.rel_size, 1, self.kernel_size[1]))
-        self.relative_y = nn.Parameter(torch.Tensor((out_channels // groups) - self.rel_size, self.kernel_size[0], 1))
+        self.relative_x = nn.Parameter(torch.Tensor(self.rel_size, self.kernel_size[1]))
+        self.relative_y = nn.Parameter(torch.Tensor((out_channels // groups) - self.rel_size, self.kernel_size[0]))
 
         self.weight_query = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
         self.weight_key = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
@@ -63,11 +63,6 @@ class SelfAttentionConv2d(nn.Module):
         fw = (pw - kw) // self.stride[1] + 1
         fc = self.out_channels
 
-        rel_x = self.relative_x.repeat(1, kh, 1)
-        rel_y = self.relative_y.repeat(1, 1, kw)
-        relative_pos = torch.cat([rel_x, rel_y], dim=0) \
-                            .repeat(self.groups, 1, 1)  # fc, kh, kw
-
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
 
@@ -80,8 +75,17 @@ class SelfAttentionConv2d(nn.Module):
         win_q = vq[:, :, (kh-1)//2:ph-(kh//2):self.stride[0], (kw-1)//2:pw-(kw//2):self.stride[1]]
         win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
 
-        vx = torch.einsum('bchw,ckl->bhwkl', [win_q, relative_pos])
-        vx += (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
+        win_q_b = win_q.view(b, self.groups, -1, fh, fw) # b, n, fc/n, fh, fw
+
+        win_q_x = win_q_b[:, :, :self.rel_size, :, :] # b, n, x, fh, fw
+        win_q_x = torch.einsum('bnchw,ck->bhwk', [win_q_x, self.relative_x]) # b, fh, fw, kw
+        
+        win_q_y = win_q_b[:, :, self.rel_size:, :, :] # b, n, y, fh, fw
+        win_q_y = torch.einsum('bnchw,ck->bhwk', [win_q_y, self.relative_y]) # b, fh, fw, kh
+
+        vx = (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
+
+        vx = vx + win_q_x.unsqueeze(3) + win_q_y.unsqueeze(4)
 
         vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
