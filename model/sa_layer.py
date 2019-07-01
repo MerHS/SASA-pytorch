@@ -50,9 +50,8 @@ class SelfAttentionConv2d(nn.Module):
             bound = 1 / math.sqrt(self.out_channels)
             init.uniform_(self.bias, -bound, bound)
 
-        rel_bound = 1 / math.sqrt(self.rel_size)
-        init.uniform_(self.relative_x, -rel_bound, rel_bound)
-        init.uniform_(self.relative_y, -rel_bound, rel_bound)
+        init.normal_(self.relative_x, 0, 1)
+        init.normal_(self.relative_y, 0, 1)
 
     def forward(self, x):
         b, c, h, w = x.size()
@@ -144,14 +143,11 @@ class SAMixtureConv2d(nn.Module):
             bound = 1 / math.sqrt(self.out_channels)
             init.uniform_(self.bias, -bound, bound)
 
-        rel_bound = 1 / math.sqrt(self.rel_size)
-        init.uniform_(self.relative_x, -rel_bound, rel_bound)
-        init.uniform_(self.relative_y, -rel_bound, rel_bound)
-
-        emb_bound = 1 / math.sqrt(self.out_channels // self.groups)
-        init.uniform_(self.emb_x, -emb_bound, emb_bound)
-        init.uniform_(self.emb_y, -emb_bound, emb_bound)
-        init.uniform_(self.emb_m, -emb_bound, emb_bound)
+        init.normal_(self.relative_x, 0, 1)
+        init.normal_(self.relative_y, 0, 1)
+        init.normal_(self.emb_x, 0, 1)
+        init.normal_(self.emb_y, 0, 1)
+        init.normal_(self.emb_m, 0, 1)
 
     def forward(self, x):
         b, c, h, w = x.size()
