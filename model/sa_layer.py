@@ -67,19 +67,19 @@ class SelfAttentionConv2d(nn.Module):
 
         vq = self.weight_query(x)
         vk = self.weight_key(x)
-        vv = self.weight_value(x)
+        vv = self.weight_value(x) # b, fc, ph, pw
 
-        # b, fc, fh, fw, 1, 1
+        # b, fc, fh, fw
         win_q = vq[:, :, (kh-1)//2:ph-(kh//2):self.stride[0], (kw-1)//2:pw-(kw//2):self.stride[1]]
 
-        win_q_b = win_q.view(b, self.groups, -1, fh, fw) # b, n, fc/n, fh, fw
+        win_q_b = win_q.view(b, self.groups, -1, fh, fw) # b, g, fc/g, fh, fw
 
-        win_q_x, win_q_y = win_q_b.split(self.rel_size, dim=2) # (b, n, x, fh, fw), (b, n, y, fh, fw)
-        win_q_x = torch.einsum('bnxhw,xk->bhwk', (win_q_x, self.relative_x)) # b, fh, fw, kw
-        win_q_y = torch.einsum('bnyhw,yk->bhwk', (win_q_y, self.relative_y)) # b, fh, fw, kh
+        win_q_x, win_q_y = win_q_b.split(self.rel_size, dim=2) # (b, g, x, fh, fw), (b, g, y, fh, fw)
+        win_q_x = torch.einsum('bgxhw,xk->bhwk', (win_q_x, self.relative_x)) # b, fh, fw, kw
+        win_q_y = torch.einsum('bgyhw,yk->bhwk', (win_q_y, self.relative_y)) # b, fh, fw, kh
 
         win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
-        
+
         vx = (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
         vx = vx + win_q_x.unsqueeze(3) + win_q_y.unsqueeze(4) # add rel_x, rel_y
         vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
@@ -88,7 +88,7 @@ class SelfAttentionConv2d(nn.Module):
         fin_v = torch.einsum('bchwkl->bchw', (vx * win_v, )) # (b, fc, fh, fw, kh, kw) -> (b, fc, fh, fw)
 
         if self.bias is not None:
-            fin_v += self.bias.view(1, -1, 1, 1)
+            fin_v += self.bias
 
         return fin_v
 
@@ -113,30 +113,32 @@ class SAMixtureConv2d(nn.Module):
         self.mix = mix # weight mixture
 
         if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_channels))
+            self.bias = nn.Parameter(torch.Tensor(1, out_channels, 1, 1))
         else:
             self.register_parameter('bias', None)
 
         # relative position offsets are shared between multi-heads
         self.rel_size = (out_channels // groups) // 2
-        self.relative_x = nn.Parameter(torch.Tensor(self.rel_size, 1, self.kernel_size[1]))
-        self.relative_y = nn.Parameter(torch.Tensor((out_channels // groups) - self.rel_size, self.kernel_size[0], 1))
+        self.relative_x = nn.Parameter(torch.Tensor(self.rel_size, self.kernel_size[1]))
+        self.relative_y = nn.Parameter(torch.Tensor((out_channels // groups) - self.rel_size, self.kernel_size[0]))
 
-        self.weight_query = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
-        self.weight_key = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
-        self.weight_value = [nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups)) for _ in range(mix)]
+        self.weight_query = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
+        self.weight_key = nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False)
+        self.weight_values = nn.ModuleList([nn.Conv2d(self.in_channels, self.out_channels, 1, groups=self.groups, bias=False) for _ in range(mix)])
 
-        self.emb_x = nn.Parameter(torch.Tensor(out_channels // groups, 1,                          in_width + 2 * padding[1]))
-        self.emb_y = nn.Parameter(torch.Tensor(out_channels // groups, in_height + 2 * padding[0], 1                        ))
-        self.emb_m = nn.Parameter(torch.Tensor(mix, out_channels // groups, 1, 1)) # m, fc/g, 1, 1
+        self.emb_x = nn.Parameter(torch.Tensor(out_channels // groups, in_width + 2 * self.padding[1])) # fc/g, pw
+        self.emb_y = nn.Parameter(torch.Tensor(out_channels // groups, in_height + 2 * self.padding[0])) # fc/g, ph
+        self.emb_m = nn.Parameter(torch.Tensor(mix, out_channels // groups)) # m, fc/g
+
+        self.softmax = nn.Softmax(dim=3)
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        init.kaiming_normal_(self.weight_query, mode='fan_out', nonlinearity='relu')
-        init.kaiming_normal_(self.weight_key, mode='fan_out', nonlinearity='relu')
-        for wv in self.weight_value:
-            init.kaiming_normal_(wv, mode='fan_out', nonlinearity='relu')
+        init.kaiming_normal_(self.weight_query.weight, mode='fan_out', nonlinearity='relu')
+        init.kaiming_normal_(self.weight_key.weight, mode='fan_out', nonlinearity='relu')
+        for wv in self.weight_values:
+            init.kaiming_normal_(wv.weight, mode='fan_out', nonlinearity='relu')
 
         if self.bias is not None:
             bound = 1 / math.sqrt(self.out_channels)
@@ -146,7 +148,7 @@ class SAMixtureConv2d(nn.Module):
         init.uniform_(self.relative_x, -rel_bound, rel_bound)
         init.uniform_(self.relative_y, -rel_bound, rel_bound)
 
-        emb_bound = 1 / math.sqrt(self.out_channels // self.gropus)
+        emb_bound = 1 / math.sqrt(self.out_channels // self.groups)
         init.uniform_(self.emb_x, -emb_bound, emb_bound)
         init.uniform_(self.emb_y, -emb_bound, emb_bound)
         init.uniform_(self.emb_m, -emb_bound, emb_bound)
@@ -158,48 +160,40 @@ class SAMixtureConv2d(nn.Module):
 
         fh = (ph - kh) // self.stride[0] + 1
         fw = (pw - kw) // self.stride[1] + 1
-        fc = self.out_channels
-
-        # TODO: check this could be moved to init
-        rel_x = self.relative_x.repeat(1, kh, 1)
-        rel_y = self.relative_y.repeat(1, 1, kw)
-        relative_pos = torch.cat([rel_x, rel_y], dim=0).repeat(self.groups, 1, 1).view(fc, kh*kw, 1)
 
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
 
-        x_ij = x.permute(0, 2, 3, 1).view(b, ph*pw, self.groups, 1, c // self.groups) # b, ph*pw, g, 1, c/g
+        vq = self.weight_query(x)
+        vk = self.weight_key(x) # b, fc, fh, fw
 
-        vq = x_ij.matmul(self.weight_query).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
-        vk = x_ij.matmul(self.weight_key).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
+        # b, fc, fh, fw
+        win_q = vq[:, :, (kh-1)//2:ph-(kh//2):self.stride[0], (kw-1)//2:pw-(kw//2):self.stride[1]]
+
+        win_q_b = win_q.view(b, self.groups, -1, fh, fw) # b, g, fc/g, fh, fw
+
+        win_q_x, win_q_y = win_q_b.split(self.rel_size, dim=2) # (b, g, x, fh, fw), (b, g, y, fh, fw)
+        win_q_x = torch.einsum('bgxhw,xk->bhwk', (win_q_x, self.relative_x)) # b, fh, fw, kw
+        win_q_y = torch.einsum('bgyhw,yk->bhwk', (win_q_y, self.relative_y)) # b, fh, fw, kh
+
+        win_k = vk.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1]) # b, fc, fh, fw, kh, kw
+
+        vx = (win_q.unsqueeze(4).unsqueeze(4) * win_k).sum(dim=1)  # b, fh, fw, kh, kw
+        vx = vx + win_q_x.unsqueeze(3) + win_q_y.unsqueeze(4) # add rel_x, rel_y
+        vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
         # spatially aware mixture embedding
-        p_ab = (self.emb_x.repeat(1, ph, 1) + self.emb_y.repeat(1, 1, pw)).unsqueeze(0) # 1, fc/g, ph, pw
-        p_abm = (p_ab * self.emb_m).sum(dim=1) # m, fc/g, ph, pw, -> ßm, ph, pw
-        p_abm = F.softmax(p_abm, dim=0).unsqueeze(1).unsqueeze(1) # m, 1, 1, ph, pw
+        p_abm_x = torch.einsum('mc,cw->mw', (self.emb_m, self.emb_x)).unsqueeze(1) # m, 1, pw
+        p_abm_y = torch.einsum('mc,ch->mh', (self.emb_m, self.emb_y)).unsqueeze(2) # m, ph, 1
+        p_abm = F.softmax(p_abm_x + p_abm_y, dim=0) # m, ph, pw
 
-        vv = []
-        for w_v in self.weight_value:
-            vv_x = x_ij.matmul(w_v).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
-            vv.append(vv_x)
-        vv = torch.stack(vv, dim=0) * p_abm # m, b, fc, ph, pw
-        vv = vv.sum(dim=0) # b, fc, ph, pw
+        vv = torch.stack([weight_value(x) for weight_value in self.weight_values], dim=0) # m, b, fc, ph, pw
+        vv = torch.einsum('mbchw,mhw->bchw', (vv, p_abm)) # b, fc, ph, pw
 
-        # window
-        win_k = F.unfold(vk, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
-        win_q = F.unfold(vq, (kh, kw), stride=self.stride).view(b, fc, kh, kw, fh*fw)
-        win_v = F.unfold(vv, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
-
-        win_q = win_q[:, :, (kh-1)//2, (kw-1)//2, :].view(b, fc, 1, fh*fw)
-        vx = (win_q * (win_k + relative_pos)).sum(dim=1) # (b, kh*kw, fh*fw)
-
-        vx = F.softmax(vx, dim=2).unsqueeze(1) # (b, 1, kh*kw, fh*fw)
-
-        v = (vx * win_v).sum(dim=2) # (b,  c2, kh*kw, fh*fw) -> (b, c2, fh*fw)
+        win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
+        fin_v = torch.einsum('bchwkl->bchw', (vx * win_v, )) # (b, fc, fh, fw, kh, kw) -> (b, fc, fh, fw)
 
         if self.bias is not None:
-            v += self.bias.view(1, -1, 1)
-
-        fin_v = v.view(b, fc, fh, fw)
+            fin_v += self.bias
 
         return fin_v

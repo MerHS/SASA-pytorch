@@ -79,7 +79,7 @@ class SAResNet(nn.Module):
 
         else:
             self.conv1 = sa_stem4x4(kwargs['in_height'], kwargs['in_width'],
-                                    3, self.in_planes, groups=4, mix=4)
+                                    3, self.inplanes, groups=1, mix=4)
             self.maxpool = nn.MaxPool2d(kernel_size=4, stride=4)
 
 
