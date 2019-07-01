@@ -33,16 +33,16 @@ class SelfAttentionConv2d(nn.Module):
         self.relative_x = nn.Parameter(torch.Tensor(self.rel_size, 1, self.kernel_size[1]))
         self.relative_y = nn.Parameter(torch.Tensor((out_channels // groups) - self.rel_size, self.kernel_size[0], 1))
 
-        self.weight_query = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
-        self.weight_key = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
-        self.weight_value = nn.Parameter(torch.Tensor(groups, in_channels // groups, out_channels // groups))
+        self.weight_query = nn.Conv1d(c, c2, 1, groups=n, bias=False)
+        self.weight_key = nn.Conv1d(c, c2, 1, groups=n, bias=False)
+        self.weight_value = nn.Conv1d(c, c2, 1, groups=n, bias=False)
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        init.kaiming_normal_(self.weight_query, mode='fan_out', nonlinearity='relu')
-        init.kaiming_normal_(self.weight_key, mode='fan_out', nonlinearity='relu')
-        init.kaiming_normal_(self.weight_value, mode='fan_out', nonlinearity='relu')
+        init.kaiming_normal_(self.weight_query.weight, mode='fan_out', nonlinearity='relu')
+        init.kaiming_normal_(self.weight_key.weight, mode='fan_out', nonlinearity='relu')
+        init.kaiming_normal_(self.weight_value.weight, mode='fan_out', nonlinearity='relu')
 
         if self.bias is not None:
             bound = 1 / math.sqrt(self.out_channels)
@@ -69,11 +69,11 @@ class SelfAttentionConv2d(nn.Module):
         px, py = self.padding
         x = F.pad(x, (py, py, px, px))
 
-        x_ij = x.permute(0, 2, 3, 1).view(b, ph*pw, self.groups, 1, c // self.groups)
+        x_ij = x.view(b, c, -1)
 
-        vq = x_ij.matmul(self.weight_query).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
-        vk = x_ij.matmul(self.weight_key).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
-        vv = x_ij.matmul(self.weight_value).permute(0, 2, 3, 4, 1).view(b, fc, ph, pw)
+        vq = self.weight_query(x_ij).view(b, fc, ph, pw)
+        vk = self.weight_key(x_ij).view(b, fc, ph, pw)
+        vv = self.weight_value(x_ij).view(b, fc, ph, pw)
 
         win_k = F.unfold(vk, (kh, kw), stride=self.stride).view(b, fc, kh*kw, fh*fw)
         win_q = F.unfold(vq, (kh, kw), stride=self.stride).view(b, fc, kh, kw, fh*fw)
