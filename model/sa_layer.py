@@ -82,8 +82,7 @@ class SelfAttentionConv2d(nn.Module):
         win_v = vv.unfold(2, kh, self.stride[0]).unfold(3, kw, self.stride[1])
 
         win_q = win_q[:, :, :, :, (kh-1)//2, (kw-1)//2].unsqueeze(4).unsqueeze(4) # b, fc, fh, fh, 1, 1
-        vx = win_q * (win_k + relative_pos) # b, fc, fh, fw, kh, kw
-        vx = vx.sum(dim=1) # b, fh, fw, kh, kw
+        vx = (win_q * win_k).sum(dim=1) + (win_q * relative_pos).sum(dim=1) # b, fh, fw, kh, kw
 
         vx = self.softmax(vx.view(b, fh, fw, -1)).view(b, 1, fh, fw, kh, kw)
 
